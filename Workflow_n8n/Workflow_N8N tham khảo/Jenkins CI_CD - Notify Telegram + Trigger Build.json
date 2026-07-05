@@ -1,0 +1,866 @@
+{
+  "name": "Jenkins CI/CD - Notify Telegram + Trigger Build",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Jenkins CI/CD workflow\n\nLuồng này có 3 phần:\n1. Jenkins gọi Webhook của n8n khi build xong, n8n format kết quả, cập nhật trạng thái build rồi gửi Telegram.\n2. Telegram gọi build Jenkins:\n   - Gõ `api` để build RedeemGiftAPI.\n   - Gõ `client` để build RedeemGiftClient.\n3. Có build lock theo từng project:\n   - API và Client có thể build đồng thời.\n   - Cùng một project đang `running` thì không cho gọi build lần nữa.\n   - Lock được tạo TRƯỚC khi gọi Jenkins để chặn spam lệnh.\n   - Nếu 2 request đến gần như cùng lúc, node `Create build lock` vẫn kiểm tra lại bằng SQL `ON CONFLICT`.\n   - Lock tự hết hiệu lực nếu treo quá 2 giờ.\n\nCần sửa:\n- Telegram credential + chatId\n- Jenkins URL / Job name / token nếu muốn trigger Jenkins build\n- Postgres credential cho các node lock\n- Cấu hình Jenkins plugin/webhook gọi URL: /webhook/jenkins-build-status",
+        "height": 572,
+        "width": 392
+      },
+      "id": "4369eed1-453f-45f7-baa7-1a60cb824260",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jenkins-build-status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b24ed361-b108-40a9-8fe7-6682f69012fd",
+      "name": "Jenkins Build Status Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        448
+      ],
+      "webhookId": "jenkins-build-status"
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhookInput = $input.first().json;\n\n// Payload thật từ Jenkins nằm trong body\nconst input = webhookInput.body || webhookInput;\n\nconst build = input.build || {};\nconst scm = input.scm || input.git || {};\n\nconst jobName =\n  input.job ||\n  input.name ||\n  input.job_name ||\n  input.jobName ||\n  input.project_name ||\n  build.jobName ||\n  'Jenkins Job';\n\nconst buildNumber =\n  input.buildNumber ||\n  input.build_number ||\n  build.number ||\n  input.number ||\n  'N/A';\n\nconst rawStatus =\n  input.status ||\n  input.build_status ||\n  input.buildStatus ||\n  input.result ||\n  build.status ||\n  'UNKNOWN';\n\nconst status = String(rawStatus).toUpperCase();\n\nconst buildUrl =\n  input.url ||\n  input.build_url ||\n  input.buildUrl ||\n  build.full_url ||\n  build.url ||\n  '';\n\nconst branch =\n  input.branch ||\n  scm.branch ||\n  input.git_branch ||\n  input.ref ||\n  '';\n\nconst commit =\n  input.commit ||\n  scm.commit ||\n  input.git_commit ||\n  '';\n\nconst author =\n  input.author ||\n  scm.author ||\n  input.git_author ||\n  '';\n\nconst duration =\n  input.duration ||\n  input.duration_ms ||\n  build.duration ||\n  '';\n\nfunction detectProjectKey(payload, name) {\n  const explicit = payload.project_key || payload.projectKey || payload.project || '';\n  const s = String(explicit || name || '').toLowerCase();\n\n  if (s.includes('redeemgiftapi') || s.includes('redeem_gift_api') || s.includes('gift_api') || s.includes('_api') || s.endsWith('api') || s.includes(' api')) {\n    return 'RedeemGiftAPI';\n  }\n\n  if (s.includes('redeemgiftclient') || s.includes('redeem_gift_client') || s.includes('gift_client') || s.includes('client') || s.includes('frontend') || s.includes('fe')) {\n    return 'RedeemGiftClient';\n  }\n\n  return '';\n}\n\nfunction toDbStatus(s) {\n  if (['SUCCESS', 'SUCCEEDED', 'OK', 'PASSED'].includes(s)) return 'success';\n  if (['FAILURE', 'FAILED', 'ERROR'].includes(s)) return 'failed';\n  if (['UNSTABLE', 'WARNING'].includes(s)) return 'unstable';\n  if (['ABORTED', 'CANCELLED', 'CANCELED'].includes(s)) return 'aborted';\n  if (['STARTED', 'RUNNING', 'IN_PROGRESS'].includes(s)) return 'running';\n  return 'unknown';\n}\n\nconst project_key = detectProjectKey(input, jobName);\nconst status_db = toDbStatus(status);\n\nlet emoji = 'ℹ️';\n\nif (['SUCCESS', 'SUCCEEDED', 'OK', 'PASSED'].includes(status)) {\n  emoji = '✅';\n}\n\nif (['FAILURE', 'FAILED', 'ERROR'].includes(status)) {\n  emoji = '❌';\n}\n\nif (['UNSTABLE', 'WARNING'].includes(status)) {\n  emoji = '⚠️';\n}\n\nif (['ABORTED', 'CANCELLED', 'CANCELED'].includes(status)) {\n  emoji = '⛔';\n}\n\nif (['STARTED', 'RUNNING', 'IN_PROGRESS'].includes(status)) {\n  emoji = '🚀';\n}\n\nconst lines = [\n  `${emoji} <strong> Jenkins Build ${status} </strong>`,\n  `Project: ${project_key || 'Không xác định'}`,\n  `Job: ${jobName}`,\n  `Build: #${buildNumber}`,\n];\n\nif (branch) lines.push(`Branch: ${branch}`);\nif (commit) lines.push(`Commit: ${String(commit).slice(0, 12)}`);\nif (author) lines.push(`Author: ${author}`);\nif (duration) lines.push(`Duration: ${duration}`);\nif (buildUrl) lines.push(`URL: ${buildUrl}`);\n\nreturn [\n  {\n    json: {\n      project_key,\n      jobName,\n      buildNumber,\n      status,\n      status_db,\n      buildUrl,\n      branch,\n      commit,\n      author,\n      duration,\n      telegramMessage: lines.join('\\n'),\n      originalPayload: input,\n      rawWebhookPayload: webhookInput,\n    },\n  },\n];"
+      },
+      "id": "5ebbb2f7-a467-4616-ade4-728517a8a944",
+      "name": "Normalize Jenkins Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "8627267400",
+        "text": "={{ $('Normalize Jenkins Payload').first().json.telegramMessage }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "55853c07-2ce9-40bb-adfe-640f0755f405",
+      "name": "Send Telegram Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        448
+      ],
+      "webhookId": "d964d508-c09b-455f-80b8-cc898ae17fb4",
+      "credentials": {
+        "telegramApi": {
+          "id": "1trYqlGyBik3Xd55",
+          "name": "Telegram Jenkins"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'Jenkins event received and Telegram notification sent', jobName: $json.jobName, buildNumber: $json.buildNumber, status: $json.status } }}",
+        "options": {}
+      },
+      "id": "9ffeabd4-651c-49f5-8eff-dbc43ba6aea0",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst statusCode = item.statusCode || item.status || 'unknown';\n\nlet projectKey = '';\nlet jobType = '';\ntry {\n  const lock = $('Create build lock').first().json || {};\n  projectKey = lock.project_key || '';\n  jobType = lock.job_type || '';\n} catch (e) {}\n\nreturn [\n  {\n    json: {\n      chat_id: (() => {\n        try {\n          const msg = $('Telegram Trigger').first().json.message || $('Telegram Trigger').first().json.edited_message || {};\n          return String(msg.chat?.id || '');\n        } catch (e) {\n          return '';\n        }\n      })(),\n      project_key: projectKey,\n      job_type: jobType,\n      telegramMessage:\n        `🚀 Đã nhận lệnh build ${projectKey || 'Jenkins'}\\n\\n` +\n        `HTTP Status: ${statusCode}\\n` +\n        `Trạng thái: Jenkins đã nhận request và đưa job vào queue.\\n\\n` +\n        `Kết quả sẽ được trả về khi Jenkins build xong.`\n    }\n  }\n];"
+      },
+      "id": "adee938f-45fc-43f1-814b-37a9051ac92b",
+      "name": "Format Trigger Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        864
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || $(\"Telegram Trigger\").item.json.message.chat.id }}",
+        "text": "={{ $json.telegramMessage }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "395a0512-26ba-4481-a1de-3193ed02f219",
+      "name": "Send Trigger Result To Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2464,
+        864
+      ],
+      "webhookId": "9b80d76e-8413-4ec0-aa30-5f7251618e52",
+      "credentials": {
+        "telegramApi": {
+          "id": "1trYqlGyBik3Xd55",
+          "name": "Telegram Jenkins"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.90.165:9091/crumbIssuer/api/json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1568,
+        896
+      ],
+      "id": "8e5e4031-93c2-40a4-937e-16501a0e5de4",
+      "name": "Get Jenkins Crumb",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "5hgR49kMFSxoENR6",
+          "name": "Jenkins Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "edited_message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        864
+      ],
+      "id": "966d12b1-fcf2-4d50-bed9-051ad396b90a",
+      "name": "Telegram Trigger",
+      "webhookId": "06d65243-bb4d-48e0-ae2d-044f37ad4fc9",
+      "credentials": {
+        "telegramApi": {
+          "id": "1trYqlGyBik3Xd55",
+          "name": "Telegram Jenkins"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://192.168.90.165:9091/job/pl_redeem_gift_api/buildWithParameters' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "BRANCH",
+              "value": "main"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "={{$node[\"Get Jenkins Crumb\"].json[\"body\"][\"crumbRequestField\"]}}",
+              "value": "={{$node[\"Get Jenkins Crumb\"].json[\"body\"][\"crumb\"]}}"
+            },
+            {
+              "name": "Cookie",
+              "value": "={{ Array.isArray($node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"]) ? $node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"].map(c => c.split(';')[0]).join('; ') : $node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"].split(';')[0] }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "ffdfbcfb-9125-4d89-a1e5-d3a2bd9ffb32",
+      "name": "Trigger Jenkins Job - RedeemGiftAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2016,
+        704
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "5hgR49kMFSxoENR6",
+          "name": "Jenkins Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://192.168.90.165:9091/job/pl_redeem_gift_client/buildWithParameters' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "BRANCH",
+              "value": "main"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "={{$node[\"Get Jenkins Crumb\"].json[\"body\"][\"crumbRequestField\"]}}",
+              "value": "={{$node[\"Get Jenkins Crumb\"].json[\"body\"][\"crumb\"]}}"
+            },
+            {
+              "name": "Cookie",
+              "value": "={{ Array.isArray($node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"]) ? $node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"].map(c => c.split(';')[0]).join('; ') : $node[\"Get Jenkins Crumb\"].json[\"headers\"][\"set-cookie\"].split(';')[0] }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "f52e0194-03aa-477e-a6e9-8659f3f777a5",
+      "name": "Trigger Jenkins Job - RedeemGiftClient",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2016,
+        896
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "5hgR49kMFSxoENR6",
+          "name": "Jenkins Credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{/^api$/.test(String($('Telegram Trigger').first().json.message.text || '').trim().toLowerCase())}}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "id": "dcfca944-ea67-48ac-a6d9-ecffc24c53fe"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "5c3fbd14-ff47-46b3-9597-32fa6a4acb27",
+                    "leftValue": "={{ /^client$/.test(String($('Telegram Trigger').first().json.message?.text || '').trim().toLowerCase()) }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1792,
+        880
+      ],
+      "id": "fd990f67-6124-43a2-9316-b2808e13e8f2",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $(\"Telegram Trigger\").item.json.message.chat.id }}",
+        "text": "Vul lòng chọn nút bên dưới để build dự án",
+        "replyMarkup": "replyKeyboard",
+        "replyKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "client",
+                    "additionalFields": {}
+                  },
+                  {
+                    "text": "api",
+                    "additionalFields": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "replyKeyboardOptions": {
+          "resize_keyboard": true,
+          "one_time_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "fdca618a-5085-46c1-a226-7f096aab34bb",
+      "name": "Send no pending message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2016,
+        1104
+      ],
+      "webhookId": "0b49b77e-114d-43a1-a7ad-d791bee77bad",
+      "credentials": {
+        "telegramApi": {
+          "id": "1trYqlGyBik3Xd55",
+          "name": "Telegram Jenkins"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $('Telegram Trigger').first().json || {};\nconst msg = root.message || root.edited_message || {};\nconst text = String(msg.text || '').trim();\nconst lower = text.toLowerCase();\n\nconst chatId = msg.chat?.id ? String(msg.chat.id) : '';\nconst user = msg.from || {};\nconst requestedBy = user.username\n  ? '@' + user.username\n  : [user.first_name, user.last_name].filter(Boolean).join(' ') || String(user.id || '');\n\nlet project_key = '';\nlet job_type = '';\nlet job_name = '';\n\nif (/^api$/.test(lower)) {\n  project_key = 'RedeemGiftAPI';\n  job_type = 'api';\n  job_name = 'pl_redeem_gift_api';\n}\n\nif (/^client$/.test(lower)) {\n  project_key = 'RedeemGiftClient';\n  job_type = 'client';\n  job_name = 'pl_redeem_gift_client';\n}\n\nreturn [{\n  json: {\n    chat_id: chatId,\n    text,\n    project_key,\n    job_type,\n    job_name,\n    requested_by: requestedBy,\n    is_valid_build_command: Boolean(project_key)\n  }\n}];"
+      },
+      "id": "a9d197fa-57bc-4285-89c6-d569df2e9db3",
+      "name": "Normalize Build Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        864
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "5c9c4644-65af-4453-814e-14ee8491b978",
+              "leftValue": "={{ $json.is_valid_build_command === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7bcd1ac6-01cd-43e9-9ce4-9af0b232acb1",
+      "name": "IF: valid build command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        864
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  const projectKey = $json.project_key || '';\n  const chatId = $json.chat_id || '';\n  const requestedBy = $json.requested_by || '';\n  const jobType = $json.job_type || '';\n  const jobName = $json.job_name || '';\n\n  return `CREATE TABLE IF NOT EXISTS jenkins_build_locks (\n  project_key TEXT PRIMARY KEY,\n  chat_id TEXT,\n  requested_by TEXT,\n  status TEXT NOT NULL,\n  build_number TEXT,\n  started_at TIMESTAMP DEFAULT NOW(),\n  finished_at TIMESTAMP,\n  updated_at TIMESTAMP DEFAULT NOW()\n);\n\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS chat_id TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS requested_by TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running';\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS build_number TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT NOW();\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();\n\nWITH existing AS (\n  SELECT *\n  FROM jenkins_build_locks\n  WHERE project_key = ${q(projectKey)}\n    AND status = 'running'\n    AND started_at > NOW() - INTERVAL '2 hours'\n  LIMIT 1\n)\nSELECT\n  ${q(projectKey)} AS project_key,\n  ${q(chatId)} AS chat_id,\n  ${q(requestedBy)} AS requested_by,\n  ${q(jobType)} AS job_type,\n  ${q(jobName)} AS job_name,\n  EXISTS(SELECT 1 FROM existing) AS is_running,\n  COALESCE((SELECT status FROM existing), '') AS current_status,\n  COALESCE((SELECT started_at::text FROM existing), '') AS started_at,\n  COALESCE((SELECT requested_by FROM existing), '') AS current_requested_by,\n  COALESCE((SELECT build_number FROM existing), '') AS build_number;`;\n})() }}",
+        "options": {}
+      },
+      "id": "d1387711-6281-4d30-a27a-b5b4e3d47b46",
+      "name": "Check build lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        672,
+        768
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "020accc1-c007-4d6e-8f00-1826777652dd",
+              "leftValue": "={{ $json.is_running === true || String($json.is_running).toLowerCase() === 'true' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d2ab5d8d-2192-4904-a271-0be2df1bf9d3",
+      "name": "IF: build is running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        896,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ `⏳ ${$json.project_key} đang được build rồi.\\n\\nBắt đầu lúc: ${$json.started_at || 'không rõ'}\\nNgười gọi: ${$json.current_requested_by || 'không rõ'}\\n\\nVui lòng chờ Jenkins trả kết quả, không cần gọi lại lệnh build này.` }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "cba7d26a-1a41-471c-8b7a-cd4e64d25cc0",
+      "name": "Send build running message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1568,
+        672
+      ],
+      "webhookId": "7a1cf195-f3ac-4d5a-be7a-765daae8d2cc",
+      "credentials": {
+        "telegramApi": {
+          "id": "1trYqlGyBik3Xd55",
+          "name": "Telegram Jenkins"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  const projectKey = $json.project_key || '';\n  const statusDb = $json.status_db || 'unknown';\n  const buildNumber = $json.buildNumber || '';\n  const telegramMessage = $json.telegramMessage || '';\n  const jobName = $json.jobName || '';\n  const status = $json.status || '';\n\n  return `CREATE TABLE IF NOT EXISTS jenkins_build_locks (\n  project_key TEXT PRIMARY KEY,\n  chat_id TEXT,\n  requested_by TEXT,\n  status TEXT NOT NULL,\n  build_number TEXT,\n  started_at TIMESTAMP DEFAULT NOW(),\n  finished_at TIMESTAMP,\n  updated_at TIMESTAMP DEFAULT NOW()\n);\n\nUPDATE jenkins_build_locks\nSET status = ${q(statusDb)},\n    build_number = ${q(buildNumber)},\n    finished_at = CASE WHEN ${q(statusDb)} = 'running' THEN finished_at ELSE NOW() END,\n    updated_at = NOW()\nWHERE project_key = ${q(projectKey)};\n\nSELECT\n  ${q(projectKey)} AS project_key,\n  ${q(jobName)} AS jobName,\n  ${q(buildNumber)} AS buildNumber,\n  ${q(status)} AS status,\n  ${q(statusDb)} AS status_db,\n  ${q(telegramMessage)} AS telegramMessage;`;\n})() }}",
+        "options": {}
+      },
+      "id": "d8226552-a5e3-4777-b6aa-b4299354e6fd",
+      "name": "Update build lock result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        448,
+        448
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM jenkins_build_locks\nWHERE chat_id = '8627267400';",
+        "options": {}
+      },
+      "id": "df0ede40-8fa4-4877-8b7e-c74508854ff5",
+      "name": "Delete jenkins_build_locks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        0,
+        224
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM jenkins_build_locks\nWHERE chat_id = '8627267400';",
+        "options": {}
+      },
+      "id": "939d1d3b-2664-495f-a865-8f717a3fafe2",
+      "name": "Select jenkins_build_locks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        0,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  const projectKey = $json.project_key || '';\n  const chatId = $json.chat_id || '';\n  const requestedBy = $json.requested_by || '';\n  const jobType = $json.job_type || '';\n  const jobName = $json.job_name || '';\n\n  return `CREATE TABLE IF NOT EXISTS jenkins_build_locks (\n  project_key TEXT PRIMARY KEY,\n  chat_id TEXT,\n  requested_by TEXT,\n  status TEXT NOT NULL,\n  build_number TEXT,\n  started_at TIMESTAMP DEFAULT NOW(),\n  finished_at TIMESTAMP,\n  updated_at TIMESTAMP DEFAULT NOW()\n);\n\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS chat_id TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS requested_by TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running';\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS build_number TEXT;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP DEFAULT NOW();\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP;\nALTER TABLE jenkins_build_locks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();\n\nWITH upserted AS (\n  INSERT INTO jenkins_build_locks (\n    project_key,\n    chat_id,\n    requested_by,\n    status,\n    build_number,\n    started_at,\n    finished_at,\n    updated_at\n  )\n  VALUES (\n    ${q(projectKey)},\n    ${q(chatId)},\n    ${q(requestedBy)},\n    'running',\n    NULL,\n    NOW(),\n    NULL,\n    NOW()\n  )\n  ON CONFLICT (project_key)\n  DO UPDATE SET\n    chat_id = EXCLUDED.chat_id,\n    requested_by = EXCLUDED.requested_by,\n    status = 'running',\n    build_number = NULL,\n    started_at = NOW(),\n    finished_at = NULL,\n    updated_at = NOW()\n  WHERE jenkins_build_locks.status <> 'running'\n     OR jenkins_build_locks.started_at < NOW() - INTERVAL '2 hours'\n  RETURNING\n    project_key,\n    chat_id,\n    requested_by,\n    status,\n    started_at,\n    build_number\n),\ncurrent_lock AS (\n  SELECT *\n  FROM jenkins_build_locks\n  WHERE project_key = ${q(projectKey)}\n  LIMIT 1\n)\nSELECT\n  ${q(projectKey)} AS project_key,\n  COALESCE((SELECT chat_id FROM upserted), (SELECT chat_id FROM current_lock), ${q(chatId)}) AS chat_id,\n  ${q(requestedBy)} AS requested_by,\n  ${q(jobType)} AS job_type,\n  ${q(jobName)} AS job_name,\n  EXISTS(SELECT 1 FROM upserted) AS lock_acquired,\n  NOT EXISTS(SELECT 1 FROM upserted) AS is_running,\n  COALESCE((SELECT status FROM upserted), (SELECT status FROM current_lock), '') AS current_status,\n  COALESCE((SELECT started_at::text FROM upserted), (SELECT started_at::text FROM current_lock), '') AS started_at,\n  COALESCE((SELECT requested_by FROM current_lock), ${q(requestedBy)}) AS current_requested_by,\n  COALESCE((SELECT build_number FROM current_lock), '') AS build_number;`;\n})() }}",
+        "options": {}
+      },
+      "id": "d6c79f50-e627-4bd1-a14e-776a4a185d40",
+      "name": "Create build lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1120,
+        848
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "53527a0e-8af0-4c0f-9b41-28fa4d1d23b8",
+              "leftValue": "={{ $json.lock_acquired === true || String($json.lock_acquired).toLowerCase() === 'true' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1c10f1e-0de5-483e-ab3e-20f0e35834b7",
+      "name": "IF: lock acquired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        848
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Jenkins Build Status Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Jenkins Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Jenkins Payload": {
+      "main": [
+        [
+          {
+            "node": "Update build lock result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update build lock result": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Notification": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Build Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Build Command": {
+      "main": [
+        [
+          {
+            "node": "IF: valid build command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: valid build command?": {
+      "main": [
+        [
+          {
+            "node": "Check build lock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send no pending message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check build lock": {
+      "main": [
+        [
+          {
+            "node": "IF: build is running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: build is running?": {
+      "main": [
+        [
+          {
+            "node": "Send build running message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create build lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Jenkins Crumb": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Trigger Jenkins Job - RedeemGiftAPI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Trigger Jenkins Job - RedeemGiftClient",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send no pending message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Jenkins Job - RedeemGiftAPI": {
+      "main": [
+        [
+          {
+            "node": "Format Trigger Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Jenkins Job - RedeemGiftClient": {
+      "main": [
+        [
+          {
+            "node": "Format Trigger Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Trigger Result": {
+      "main": [
+        [
+          {
+            "node": "Send Trigger Result To Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create build lock": {
+      "main": [
+        [
+          {
+            "node": "IF: lock acquired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: lock acquired?": {
+      "main": [
+        [
+          {
+            "node": "Get Jenkins Crumb",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send build running message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b5bf0113-7987-4ec5-bd6b-c10f2d2fdc34",
+  "meta": {
+    "instanceId": "6ed645ef0e1abea1bf1e4e935ff04f9e18d39812387f63cda3415b46240f0405"
+  },
+  "id": "f2DYEpjgOJmjsupF",
+  "tags": []
+}

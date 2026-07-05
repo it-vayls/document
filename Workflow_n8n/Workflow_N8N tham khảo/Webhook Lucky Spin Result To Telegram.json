@@ -1,0 +1,169 @@
+{
+  "name": "Webhook Lucky Spin Result To Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lucky-spin-result",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b6a78fd1-12f7-4f57-91a7-84ab25c5442c",
+      "name": "Webhook Lucky Spin Result",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        -16
+      ],
+      "webhookId": "c01e04c4-041b-4d84-ab37-c954821fead4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "b5083eb8-d712-4469-a631-1b71f414c6fa",
+              "leftValue": "={{ $json.headers['x-webhook-secret'] || '' }}",
+              "rightValue": "0123456789abcGRJETJ4NCRKEWNFCKMDJMMCKDFMXEJRFPJERPOWKXENJWXOQLWKEQOZKEW#@!",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c7a68016-f30f-4a08-b687-f53dc9ab60b2",
+      "name": "IF: secret đúng?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "8627267400",
+        "text": "={{ `🎉 Thông tin KH trúng thưởng vòng quay may mắn!\n\nKhách hàng: ${$json.body.CustomerName || ''}\nSĐT: ${$json.body.PhoneNumber || ''}\nDự án: ${$json.body.ProjectCode || ''}\nGiá trị bill: ${Number($json.body.BillValue || 0).toLocaleString('en-US')} VND\nGiải thưởng: ${$json.body.GiftName || ''}\nThời gian trúng: ${$json.body.WonAt || ''}\nLượt quay còn lại: ${$json.body.SpinsRemaining ?? ''}` }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "5f80002f-70f9-4a63-b50f-8ad8d3ad07e8",
+      "name": "Send Telegram Winner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        -112
+      ],
+      "webhookId": "6a075856-37bd-441f-a1eb-2eb21bdb285d",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, message: 'Telegram notification sent' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3ad4d9cd-c0ae-4080-b119-96bd1881ea79",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, message: 'Unauthorized webhook secret' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "9245166b-6894-4e20-b87c-f039e8221a2b",
+      "name": "Respond Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -240,
+        80
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Lucky Spin Result": {
+      "main": [
+        [
+          {
+            "node": "IF: secret đúng?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: secret đúng?": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Winner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Winner": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "81865789-a595-43dd-be6f-e109b6c49484",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6ed645ef0e1abea1bf1e4e935ff04f9e18d39812387f63cda3415b46240f0405"
+  },
+  "id": "VGhYoV2yhHRTrDBa",
+  "tags": []
+}

@@ -1,0 +1,1656 @@
+{
+  "name": "Telegram AI Email Image Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "09ebe520-a773-4f3b-8e5d-c0490eeb2e85",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        336,
+        528
+      ],
+      "webhookId": "c747cb18-341a-48bd-8a12-82d1074faf1e",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "98922590-49f2-47e2-b170-b3d355217f70",
+              "leftValue": "={{ String($('Telegram Trigger').item.json.callback_query?.data || '').trim().toLowerCase().startsWith('send_mail:') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e3497d51-9900-45fe-8efe-7b21d6add8e8",
+      "name": "IF: OK gửi mail?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        784,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const root = $('Telegram Trigger').first().json || {};\n  const msg = root.message || (root.callback_query && root.callback_query.message) || {};\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  const chatId = (msg.chat && msg.chat.id) || '';\n  const data = String(root.callback_query && root.callback_query.data || '').trim();\n  const draftId = data.startsWith('send_mail:') ? data.slice('send_mail:'.length) : '';\n  const callbackMessageId = root.callback_query?.message?.message_id || '';\n\n  return `CREATE TABLE IF NOT EXISTS pending_email_drafts_v2 (\n  chat_id TEXT NOT NULL,\n  draft_id TEXT NOT NULL,\n  email_index INTEGER,\n  to_email TEXT,\n  recipient_name TEXT,\n  subject TEXT,\n  body TEXT,\n  sender_name TEXT,\n  batch_id TEXT,\n  telegram_message_id TEXT,\n  status TEXT DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT NOW(),\n  sent_at TIMESTAMP,\n  PRIMARY KEY (chat_id, draft_id)\n);\n\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS email_index INTEGER;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS to_email TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS recipient_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS subject TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS body TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sender_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS batch_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;\n\n\nWITH selected AS (\n  SELECT *\n  FROM pending_email_drafts_v2\n  WHERE chat_id = ${q(chatId)}\n    AND draft_id = ${q(draftId)}\n    AND COALESCE(status, 'pending') = 'pending'\n  LIMIT 1\n)\nSELECT\n  ${q(chatId)} AS chat_id,\n  ${q(callbackMessageId)} AS callback_message_id,\n  COUNT(*)::int AS draft_count,\n  COALESCE(json_agg(json_build_object(\n    'chat_id', chat_id,\n    'draft_id', draft_id,\n    'email_index', email_index,\n    'to_email', to_email,\n    'recipient_name', recipient_name,\n    'subject', subject,\n    'body', body,\n    'sender_name', sender_name,\n    'batch_id', batch_id,\n    'telegram_message_id', COALESCE(telegram_message_id, ${q(callbackMessageId)})\n  ) ORDER BY created_at), '[]'::json) AS drafts,\n  COALESCE(json_agg(draft_id ORDER BY created_at), '[]'::json) AS draft_ids\nFROM selected;`;\n})() }}",
+        "options": {}
+      },
+      "id": "cbadfb79-4346-4fec-8834-0b6ff41f1112",
+      "name": "Get pending draft",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1008,
+        352
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "a88ce040-a494-4a29-9886-2cb6fa91821a",
+              "leftValue": "={{ Number($json.draft_count || 0) > 0 }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3f4230b3-9f23-47da-801b-7dbae19ef121",
+      "name": "IF: has draft_id?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  let row = $json || {};\n  try {\n    row = $('Build send success').first().json || row;\n  } catch (e) {}\n  const chatId = row.chat_id || '';\n  const draftId = row.draft_id || '';\n\n  return `UPDATE pending_email_drafts_v2\nSET status = 'sent',\n    sent_at = NOW()\nWHERE chat_id = ${q(chatId)}\n  AND draft_id = ${q(draftId)};\n\nDELETE FROM pending_email_drafts_v2\nWHERE chat_id = ${q(chatId)}\n  AND draft_id = ${q(draftId)};`;\n})() }}",
+        "options": {}
+      },
+      "id": "4cc06f87-009c-43e5-85e1-db45fad5afce",
+      "name": "Delete pending draft",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        2720,
+        256
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.callback_query.from.id }}",
+        "text": "✅ Đã gửi email thành công.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "fa2621d7-570c-48a7-9272-b49cb2ee52ba",
+      "name": "Send success message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2944,
+        256
+      ],
+      "webhookId": "e9f8f5b6-8063-4621-a652-d61b38fa7fc5",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "text": "Email nháp này không còn trong danh sách chờ gửi hoặc đã được gửi/xóa trước đó. Bạn hãy tạo email draft mới nếu cần.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "15e89ede-f1a0-4400-8207-b352c219409d",
+      "name": "Send no pending message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1456,
+        448
+      ],
+      "webhookId": "d73f1519-7b03-4132-b322-b4a61c838d15",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "dc2ad520-e976-46ef-967b-c49111d7069b",
+              "leftValue": "={{ !!$(\"Telegram Trigger\").item.json.message?.photo?.length }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "223268dd-0860-4592-853e-9ccea92f5621",
+      "name": "If photo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ (() => {\n  const root = $('Telegram Trigger').item.json || {};\n  const msg = root.message || (root.callback_query && root.callback_query.message) || {};\n\n  const currentText = msg.caption || msg.text || '';\n  const repliedText = msg.reply_to_message ? (msg.reply_to_message.caption || msg.reply_to_message.text || '') : '';\n  const quoteText = msg.quote ? (msg.quote.text || '') : '';\n  const callbackData = root.callback_query ? (root.callback_query.data || '') : '';\n\n  let imageAnalysis = '';\n  try {\n    const formatted = $('Format Analyze Result').item.json || {};\n    imageAnalysis = formatted.image_analysis || formatted.message || '';\n  } catch (e) {\n    imageAnalysis = '';\n  }\n\n  if (callbackData) return 'Người dùng bấm nút callback: ' + callbackData;\n\n  const parts = [];\n  if (repliedText) parts.push('Nội dung tin nhắn được reply:\\n' + repliedText);\n  if (quoteText) parts.push('Nội dung được quote:\\n' + quoteText);\n  if (currentText) parts.push('Nội dung người dùng vừa gửi:\\n' + currentText);\n  if (imageAnalysis) parts.push('Kết quả phân tích ảnh A:\\n' + imageAnalysis);\n\n  if (parts.length) {\n    return parts.join('\\n\\n') + '\\n\\nHãy hiểu yêu cầu hiện tại. Nếu người dùng muốn tạo/sửa ảnh, tạo email draft hoặc gọi tool thì trả JSON đúng schema. Nếu là chat thường thì trả text tự nhiên.';\n  }\n\n  return 'Người dùng gửi nội dung không có text.';\n})() }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Bạn là trợ lý AI Telegram chạy trong n8n automation production.\n\nNGUYÊN TẮC CHUNG\n- Luôn trả lời bằng tiếng Việt.\n- Trả lời rõ ràng, thân thiện, ngắn gọn nhưng đủ ý.\n- Không bịa dữ liệu, không giả lập kết quả API.\n- Nếu thiếu dữ liệu hoặc không chắc, hãy nói rõ.\n- Không tự gửi email thật. Chỉ tạo Gmail draft, chờ người dùng bấm Send Mail.\n\nQUY TẮC DÙNG TOOL\nKhi tin nhắn bắt đầu bằng \"PJ\":\n- Bắt buộc gọi HTTP Request Tool trước khi trả lời.\n- Không tự đoán hoặc dùng kiến thức nội bộ.\n- Chỉ trả lời sau khi có dữ liệu API.\n- Nếu API lỗi, nói rõ API đang lỗi và không bịa kết quả.\n\nQUY TẮC EMAIL DRAFT\nKhi user yêu cầu viết email, soạn mail, tạo mail, gửi email hoặc reply email:\n- Chỉ tạo Gmail draft, không tự gửi email thật.\n- Phải kiểm tra đủ thông tin cơ bản trước khi tạo draft.\n- Mỗi email bắt buộc có đủ 5 nhóm thông tin:\n  1. Email người nhận: to\n  2. Tên người nhận: recipient_name\n  3. Tiêu đề email: subject\n  4. Nội dung chính cần viết: body hoặc đủ ý để viết body\n  5. Tên người gửi/ký tên: sender_name\n- Nếu thiếu bất kỳ thông tin nào trong 5 nhóm trên, KHÔNG tạo draft. Hãy hỏi lại user bằng JSON ask_missing_information, liệt kê rõ những thông tin còn thiếu.\n- Nếu user yêu cầu tạo nhiều email cùng lúc, mỗi email trong mảng emails phải đủ 5 nhóm thông tin trên. Nếu email nào thiếu, hỏi lại rõ email số mấy thiếu gì.\n- Body nên có lời chào theo recipient_name và phần ký tên bằng sender_name.\n- Chỉ trả JSON sạch, không markdown, không ```json, không giải thích ngoài JSON.\n\nNếu đủ thông tin email, trả đúng JSON:\n{\n  \"action\": \"create_email_drafts\",\n  \"emails\": [\n    {\n      \"to\": \"email1@example.com\",\n      \"recipient_name\": \"Tên người nhận\",\n      \"subject\": \"Tiêu đề email\",\n      \"body\": \"Nội dung email hoàn chỉnh, có lời chào và ký tên\",\n      \"sender_name\": \"Tên người gửi\"\n    }\n  ],\n  \"need_confirmation\": true\n}\n\nNếu thiếu thông tin email, trả đúng JSON:\n{\n  \"action\": \"ask_missing_information\",\n  \"message\": \"Bạn vui lòng bổ sung: email người nhận, tên người nhận, tiêu đề, nội dung chính, tên người gửi...\"\n}\n\nQUY TẮC ẢNH\n- Nếu người dùng chỉ hỏi nội dung ảnh, không cần JSON; trả text tự nhiên.\n- Nếu người dùng muốn tạo một hoặc nhiều ảnh mới, trả JSON:\n{\n  \"action\": \"generate_images\",\n  \"images\": [\n    {\n      \"name\": \"B\",\n      \"prompt\": \"Prompt tạo ảnh B rõ ràng, đầy đủ\"\n    }\n  ],\n  \"send_as_document\": false\n}\n- Nếu người dùng gửi ảnh và muốn sửa ảnh, trả JSON:\n{\n  \"action\": \"edit_image\",\n  \"prompt\": \"Mô tả phần cần chỉnh sửa ảnh\",\n  \"send_as_document\": false\n}\n- Nếu người dùng nói gửi file gốc, không nén, chất lượng cao, để in, hãy đặt send_as_document = true.\n\nNORMAL CHAT\nNếu là chat thông thường:\n- Trả lời text tự nhiên.\n- Không dùng JSON.\n- Không gọi tool nếu không cần.\n\nOUTPUT\n- Chat thường: trả text bình thường.\n- Email/image tool workflow: trả JSON sạch.\n- Không wrap JSON bằng markdown.\n- Không dùng ```json.\n- Không thêm giải thích ngoài JSON khi đang ở tool/email/image mode.\n- Không dùng Markdown.\n- Không dùng ** để bôi đậm.\n- Chỉ trả plain text."
+        }
+      },
+      "id": "e81ec313-9021-4f1a-a2f8-3a57774187cc",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.1,
+      "position": [
+        2256,
+        864
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "text": "={{ (() => {\n  const text = $json.output || $json.message || $json.text || 'Không có nội dung phản hồi.';\n  return String(text).replace(/\\\\n/g, '\\n').replace(/\\*\\*/g, '').trim();\n})() }}",
+        "replyMarkup": "replyKeyboardRemove",
+        "replyKeyboardRemove": {
+          "remove_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ea196248-72d2-44d3-8788-0154e18614db",
+      "name": "Send normal message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4064,
+        1248
+      ],
+      "webhookId": "f770c86c-8dab-40cf-9737-0306a726cf2b",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $json.subject || \"\" }}",
+        "message": "={{ $json.body || \"\" }}",
+        "options": {
+          "sendTo": "={{ $json.to || \"\" }}"
+        }
+      },
+      "id": "d6eb5bf7-b411-41dc-8073-0fd50eee5807",
+      "name": "Create a draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3840,
+        480
+      ],
+      "webhookId": "a8bcd340-d60a-4053-915a-0f85b1f133de",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ix2ltwFmCIUVpZLl",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const email = $('Split Email Drafts').item.json || {};\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n\n  let chatId = email.chat_id || '';\n  try {\n    if (!chatId) {\n      const root = $('Telegram Trigger').first().json || {};\n      const msg = root.message || (root.callback_query && root.callback_query.message) || {};\n      chatId = (msg.chat && msg.chat.id) || '';\n    }\n  } catch (e) {}\n\n  const draftId = $json.id || $json.draftId || $json.messageId || '';\n\n  return `CREATE TABLE IF NOT EXISTS pending_email_drafts_v2 (\n  chat_id TEXT NOT NULL,\n  draft_id TEXT NOT NULL,\n  email_index INTEGER,\n  to_email TEXT,\n  recipient_name TEXT,\n  subject TEXT,\n  body TEXT,\n  sender_name TEXT,\n  batch_id TEXT,\n  telegram_message_id TEXT,\n  status TEXT DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT NOW(),\n  sent_at TIMESTAMP,\n  PRIMARY KEY (chat_id, draft_id)\n);\n\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS email_index INTEGER;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS to_email TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS recipient_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS subject TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS body TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sender_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS batch_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;\n\n\nINSERT INTO pending_email_drafts_v2 (\n  chat_id,\n  draft_id,\n  email_index,\n  to_email,\n  recipient_name,\n  subject,\n  body,\n  sender_name,\n  batch_id,\n  status,\n  created_at\n)\nVALUES (\n  ${q(chatId)},\n  ${q(draftId)},\n  ${Number(email.email_index || email.index || 0)},\n  ${q(email.to)},\n  ${q(email.recipient_name)},\n  ${q(email.subject)},\n  ${q(email.body)},\n  ${q(email.sender_name)},\n  ${q(email.batch_id)},\n  'pending',\n  NOW()\n)\nON CONFLICT (chat_id, draft_id)\nDO UPDATE SET\n  email_index = EXCLUDED.email_index,\n  to_email = EXCLUDED.to_email,\n  recipient_name = EXCLUDED.recipient_name,\n  subject = EXCLUDED.subject,\n  body = EXCLUDED.body,\n  sender_name = EXCLUDED.sender_name,\n  batch_id = EXCLUDED.batch_id,\n  status = 'pending',\n  created_at = NOW(),\n  sent_at = NULL\nRETURNING chat_id, draft_id, email_index, to_email, recipient_name, subject, body, sender_name, batch_id, telegram_message_id, status;`;\n})() }}",
+        "options": {}
+      },
+      "id": "559e8467-9986-4328-84f0-6ffe79d24d34",
+      "name": "Save draft_id",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        4064,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "text": "={{ (() => {\n  return `✅ Đã tạo nháp email #${$json.index || ''} thành công.\n\nNgười nhận: ${$json.recipient_name || ''} <${$json.to || ''}>\nNgười gửi/ký tên: ${$json.sender_name || ''}\nTiêu đề: ${$json.subject || ''}\n\nNội dung:\n${$json.body || ''}\n\nNếu muốn gửi riêng email này, nhấn nút Send Mail bên dưới.`;\n})() }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Send Mail",
+                    "additionalFields": {
+                      "callback_data": "={{ 'send_mail:' + $json.draft_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "dcc9af0b-b465-4c36-a7c8-e555c7ac51a0",
+      "name": "Send created draft message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4512,
+        480
+      ],
+      "webhookId": "0361b069-bf9f-4560-9572-ffda9295c5a6",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c41d0dea-941c-4132-b560-d0714454db9f",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2128,
+        1088
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "n58ofH5qX7L7lxlh",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "contextWindowLength": "={{ 10 }}"
+      },
+      "id": "bbe37797-0e7f-43a2-80ce-139565fc80d9",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        2384,
+        1088
+      ],
+      "retryOnFail": false,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"id\": \"{{ $json.draft_id }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1680,
+        256
+      ],
+      "id": "1b24a248-5860-4a36-8e9e-b5ca88594b42",
+      "name": "HTTP Request Send Mail",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ix2ltwFmCIUVpZLl",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        2256,
+        1088
+      ],
+      "id": "c5305127-a1aa-4c64-a324-417557f0a72a",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "JYLLyj3tDbiDdeEw",
+          "name": "Groq account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendChatAction",
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        560,
+        528
+      ],
+      "id": "df680fee-1111-4cab-be89-726df70ee9d6",
+      "name": "Send a chat action",
+      "webhookId": "165b2fcd-6560-4ef5-a601-bfbf6ed2eab2",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM n8n_chat_histories\nWHERE session_id = '8627267400';",
+        "options": {}
+      },
+      "id": "d726fe79-9f7c-4877-9091-76d2bb8382c2",
+      "name": "Delete n8n_chat_histories",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        336,
+        32
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "Dùng tool này khi người dùng hỏi dữ liệu nội bộ.\n\nBắt buộc truyền tham số apiName:\n- project: khi hỏi danh sách dự án/project\n- menu: khi hỏi danh sách menu/chức năng\n- role: khi hỏi danh sách role/vai trò/quyền\n\nKhông gọi tool này nếu người dùng hỏi chuyện bình thường, hỏi thông tin đăng nhập, hỏi hướng dẫn sử dụng, hoặc không liên quan dữ liệu nội bộ.",
+        "workflowId": {
+          "__rl": true,
+          "value": "jgLzaTygp10ioy1J",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jgLzaTygp10ioy1J",
+          "cachedResultName": "Sub - Get All With Auto Login"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "apiName": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('apiName', `Chỉ nhận một trong ba giá trị: project, menu, role.`, 'string') }}"
+          },
+          "matchingColumns": [
+            "apiName"
+          ],
+          "schema": [
+            {
+              "id": "apiName",
+              "displayName": "apiName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        2512,
+        1088
+      ],
+      "id": "665ad99d-6597-4773-8b9f-2f20cbb3fa7b",
+      "name": "Call 'Sub - Telegram AI Chatbot'"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $(\"Telegram Trigger\").item.json.message.photo[$(\"Telegram Trigger\").item.json.message.photo.length - 1].file_id }}",
+        "additionalFields": {}
+      },
+      "id": "6380749b-f994-4239-8e1b-fd432849ed44",
+      "name": "Get a file",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1232,
+        640
+      ],
+      "webhookId": "0982b79b-b941-4efc-ade5-835a378f12ff",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction cleanJson(value) {\n  let s = String(value ?? '').trim();\n  s = s.replace(/```json|```/g, '').trim();\n  const start = s.indexOf('{');\n  const end = s.lastIndexOf('}');\n  if (start >= 0 && end > start) s = s.slice(start, end + 1);\n  return JSON.parse(s);\n}\n\nfunction isValidEmail(v) {\n  return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(v || '').trim());\n}\n\nconst raw = $json.output ?? $json.text ?? $json.response ?? $json.message ?? '';\nlet data;\n\ntry {\n  data = cleanJson(raw);\n} catch (e) {\n  return [{ json: { action: 'normal_chat', output: String(raw || 'Không có nội dung phản hồi.') } }];\n}\n\nif (data.action === 'create_email_draft') {\n  data = {\n    action: 'create_email_drafts',\n    emails: [{\n      to: data.to || data.email || '',\n      recipient_name: data.recipient_name || data.to_name || data.recipient || '',\n      subject: data.subject || '',\n      body: data.body || data.message || '',\n      sender_name: data.sender_name || data.from_name || data.sender || ''\n    }],\n    need_confirmation: true,\n  };\n}\n\nif (data.action === 'create_email_drafts') {\n  const sourceEmails = Array.isArray(data.emails) ? data.emails : [];\n\n  if (!sourceEmails.length) {\n    return [{ json: { action: 'ask_missing_information', message: 'Bạn muốn tạo email draft nhưng chưa có thông tin email nào. Vui lòng cung cấp email người nhận, tên người nhận, tiêu đề, nội dung chính và tên người gửi.' } }];\n  }\n\n  const normalized = sourceEmails.map((e, idx) => ({\n    index: idx + 1,\n    to: String(e.to || e.email || e.recipient_email || '').trim(),\n    recipient_name: String(e.recipient_name || e.to_name || e.recipientName || e.recipient || e.name || '').trim(),\n    subject: String(e.subject || e.title || '').trim(),\n    body: String(e.body || e.content || e.message || '').trim(),\n    sender_name: String(e.sender_name || e.from_name || e.senderName || e.sender || '').trim(),\n  }));\n\n  const missingLines = [];\n  for (const e of normalized) {\n    const missing = [];\n    if (!e.to) missing.push('email người nhận');\n    else if (!isValidEmail(e.to)) missing.push('email người nhận không hợp lệ');\n    if (!e.recipient_name) missing.push('tên người nhận');\n    if (!e.subject) missing.push('tiêu đề');\n    if (!e.body) missing.push('nội dung chính');\n    if (!e.sender_name) missing.push('tên người gửi/ký tên');\n    if (missing.length) missingLines.push(`Email #${e.index}: thiếu ${missing.join(', ')}`);\n  }\n\n  if (missingLines.length) {\n    return [{\n      json: {\n        action: 'ask_missing_information',\n        message: 'Mình chưa thể tạo email draft vì còn thiếu thông tin:\\n' + missingLines.join('\\n') + '\\n\\nBạn bổ sung giúp mình các thông tin trên nhé.'\n      }\n    }];\n  }\n\n  return [{ json: { action: 'create_email_drafts', emails: normalized, draft_count: normalized.length, need_confirmation: true } }];\n}\n\nif (data.action === 'ask_missing_information') {\n  return [{ json: { action: 'ask_missing_information', message: data.message || 'Bạn vui lòng bổ sung thêm thông tin.' } }];\n}\n\nif (['generate_image', 'generate_images', 'generate_multiple_images'].includes(data.action)) {\n  let images = [];\n  if (Array.isArray(data.images)) images = data.images;\n  else if (Array.isArray(data.items)) images = data.items;\n  else if (Array.isArray(data.prompts)) images = data.prompts.map((p, idx) => ({ name: String.fromCharCode(66 + idx), prompt: p }));\n  else if (data.prompt || data.message) images = [{ name: 'B', prompt: data.prompt || data.message || '' }];\n\n  images = images.map((img, idx) => ({\n    name: img.name || String.fromCharCode(66 + idx),\n    prompt: img.prompt || img.message || '',\n    send_as_document: Boolean(img.send_as_document ?? data.send_as_document ?? false),\n  })).filter(img => img.prompt);\n\n  if (!images.length) {\n    return [{ json: { action: 'ask_missing_information', message: 'Bạn muốn tạo ảnh nhưng chưa có mô tả ảnh cần tạo. Vui lòng bổ sung prompt/mô tả ảnh.' } }];\n  }\n\n  return [{ json: { action: 'generate_images', images, image_count: images.length, send_as_document: Boolean(data.send_as_document ?? false) } }];\n}\n\nif (data.action === 'edit_image') {\n  const prompt = String(data.prompt || data.message || '').trim();\n  if (!prompt) {\n    return [{ json: { action: 'ask_missing_information', message: 'Bạn muốn sửa ảnh nhưng chưa nói rõ cần sửa gì. Vui lòng mô tả phần cần chỉnh sửa.' } }];\n  }\n  return [{ json: { action: 'edit_image', prompt, send_as_document: Boolean(data.send_as_document ?? false) } }];\n}\n\nreturn [{ json: { action: 'normal_chat', output: data.output || data.message || String(raw) } }];\n"
+      },
+      "id": "3f6d7234-44b6-499c-a8f9-477510f700d7",
+      "name": "Normalize AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "text": "={{ (() => { const msg = $('Telegram Trigger').item.json.message || {}; const t = msg.caption || msg.text || ''; return t ? `Người dùng gửi ảnh kèm yêu cầu: ${t}. Hãy phân tích ảnh bằng tiếng Việt, trả plain text, không Markdown, không JSON.` : 'Hãy phân tích nội dung trong ảnh này bằng tiếng Việt, trả plain text, không Markdown, không JSON.'; })() }}",
+        "inputType": "binary",
+        "options": {}
+      },
+      "id": "0f92878a-eeb5-422e-9fec-42e8603ae010",
+      "name": "Analyze an image",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        1456,
+        640
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "n58ofH5qX7L7lxlh",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "08e160bc-76e6-4ae6-85ea-1f83a1ab64c5",
+              "leftValue": "={{ ['create_email_drafts','ask_missing_information','generate_images','edit_image'].includes($json.action) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "96670041-1ffd-44ff-bacc-f94d8c484511",
+      "name": "IF: action JSON?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "f651d029-c6b6-4999-a4a9-ae6c3eeac5bc",
+              "leftValue": "={{ $json.action === 'create_email_drafts' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "05f90cd9-7a86-4e89-a421-f0ce29112127",
+      "name": "IF: create drafts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "79d506fb-f503-4ec4-9b3c-bbd5165b7be8",
+              "leftValue": "={{ $json.action === 'ask_missing_information' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "84ca7739-b48a-4ddb-a31a-f7380f89b26e",
+      "name": "IF: missing info?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3392,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "b4fe3157-8bd1-4b99-a9dc-49269ba93c39",
+              "leftValue": "={{ $json.action === 'generate_images' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "42cca5c5-1e05-41fd-ae4b-03ae3c5de787",
+      "name": "IF: generate image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3616,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "3b16e747-0d8b-4f31-b473-820076005ce5",
+              "leftValue": "={{ $json.action === 'edit_image' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a0f3c48d-cc72-4e49-b21d-8e1a1872f188",
+      "name": "IF: edit image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3840,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $('IF: create drafts?').first().json.emails || [];\nlet chatId = $('Telegram Trigger').first().json.message.chat.id || '';\ntry {\n  if (!chatId) {\n    const root = $('Telegram Trigger').first().json || {};\n    const msg = root.message || (root.callback_query && root.callback_query.message) || {};\n    chatId = msg.chat && msg.chat.id ? String(msg.chat.id) : '';\n  }\n} catch (e) {}\n\nconst batchId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;\n\nreturn emails.map((e) => ({\n  json: {\n    chat_id: chatId,\n    email_index: e.index,\n    to: e.to || '',\n    recipient_name: e.recipient_name || '',\n    subject: e.subject || '',\n    body: e.body || '',\n    sender_name: e.sender_name || '',\n    batch_id: batchId,\n  }\n}));\n"
+      },
+      "id": "ad972140-87de-43ab-8a99-54b7dc9cf231",
+      "name": "Split Email Drafts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3616,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json || {});\nlet chatId = rows.find(r => r.chat_id)?.chat_id || '';\n\nconst emails = rows.map((r, idx) => ({\n  index: r.email_index || idx + 1,\n  chat_id: r.chat_id || chatId,\n  to: r.to_email || r.to || '',\n  recipient_name: r.recipient_name || '',\n  subject: r.subject || '',\n  body: r.body || '',\n  sender_name: r.sender_name || '',\n  draft_id: r.draft_id || r.id || '',\n  batch_id: r.batch_id || '',\n}));\n\nreturn emails.map(e => ({\n  json: {\n    chat_id: e.chat_id || chatId,\n    action: 'created_email_draft',\n    draft_count: emails.length,\n    index: e.index,\n    to: e.to,\n    recipient_name: e.recipient_name,\n    subject: e.subject,\n    body: e.body,\n    sender_name: e.sender_name,\n    draft_id: e.draft_id,\n    batch_id: e.batch_id,\n  }\n}));\n"
+      },
+      "id": "0870d3a1-cb91-49f6-9c5a-d923eb0fb145",
+      "name": "Build draft summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4288,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let drafts = $json.drafts || [];\n\nif (typeof drafts === 'string') {\n  try { drafts = JSON.parse(drafts); } catch (e) { drafts = []; }\n}\n\nif (!Array.isArray(drafts) || !drafts.length) {\n  let ids = $json.draft_ids || [];\n  if (typeof ids === 'string') {\n    try { ids = JSON.parse(ids); } catch (e) { ids = []; }\n  }\n\n  drafts = ids.map(id => ({\n    chat_id: $json.chat_id || '',\n    draft_id: id,\n    telegram_message_id: $json.callback_message_id || ''\n  }));\n}\n\nreturn drafts.map(d => ({\n  json: {\n    chat_id: String(d.chat_id || $json.chat_id || ''),\n    draft_id: d.draft_id || '',\n    email_index: d.email_index || '',\n    to_email: d.to_email || '',\n    recipient_name: d.recipient_name || '',\n    subject: d.subject || '',\n    body: d.body || '',\n    sender_name: d.sender_name || '',\n    batch_id: d.batch_id || '',\n    telegram_message_id: String(d.telegram_message_id || $json.callback_message_id || '')\n  }\n}));\n"
+      },
+      "id": "743d94c8-8f7c-4361-9140-1453391e1124",
+      "name": "Split pending draft_ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let target = {};\ntry {\n  target = $('Split pending draft_ids').first().json || {};\n} catch (e) {}\n\nlet callbackMessageId = '';\ntry {\n  callbackMessageId = $('Telegram Trigger').first().json.callback_query?.message?.message_id || '';\n} catch (e) {}\n\nconst telegramMessageId = target.telegram_message_id || callbackMessageId || '';\n\nreturn [{\n  json: {\n    chat_id: String(target.chat_id || ''),\n    draft_id: target.draft_id || '',\n    telegram_message_id: String(telegramMessageId || ''),\n    email_index: target.email_index || '',\n    to_email: target.to_email || '',\n    recipient_name: target.recipient_name || '',\n    subject: target.subject || '',\n    body: target.body || '',\n    sender_name: target.sender_name || '',\n    batch_id: target.batch_id || '',\n    sent_count: $input.all().length || 1\n  }\n}];\n"
+      },
+      "id": "ab58a193-8e03-4fec-89d0-f8feced0035d",
+      "name": "Build send success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1904,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash-image",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash-image (Nano Banana)"
+        },
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "id": "a478c833-ec80-46a4-afa6-9d608ae9adc1",
+      "name": "Generate Image",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        4288,
+        768
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "n58ofH5qX7L7lxlh",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "edit",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash-image",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash-image (Nano Banana)"
+        },
+        "prompt": "={{ $json.prompt || 'Hãy chỉnh sửa ảnh theo yêu cầu của người dùng.' }}",
+        "images": {
+          "values": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "id": "7322ef4b-bee9-4534-93f5-6b1969b14e70",
+      "name": "Edit Image",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        4288,
+        960
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "n58ofH5qX7L7lxlh",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "notes": "Nếu node không tự nhận binary do qua AI Agent, trong UI chọn Input Type = Binary File/Binary Data và Binary Property = data từ node Get a file."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "text": "={{ $json.message || \"Bạn vui lòng bổ sung thêm thông tin.\" }}",
+        "replyMarkup": "replyKeyboardRemove",
+        "replyKeyboardRemove": {
+          "remove_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c852ea29-76a8-4017-9f57-ed5bf8055181",
+      "name": "Send missing info message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3616,
+        672
+      ],
+      "webhookId": "f770c86c-8dab-40cf-9737-0306a726cf2b",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "text": "={{ $json.message || $json.image_analysis || 'Mình chưa đọc được nội dung ảnh.' }}",
+        "replyMarkup": "replyKeyboardRemove",
+        "replyKeyboardRemove": {
+          "remove_keyboard": true
+        },
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "81925824-d9c2-4641-858a-d581109764be",
+      "name": "Send image analysis message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2320,
+        544
+      ],
+      "webhookId": "b2cb51fa-0342-49f7-bb3a-1f220a6353d3",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "bd671bf4-e7bc-48fc-bf4e-100ba98ba55b",
+              "leftValue": "={{ (() => {\n  const msg = $('Telegram Trigger').item.json.message || {};\n  const t = String(msg.caption || msg.text || '').toLowerCase();\n\n  const keywords = [\n    'tạo ảnh', 'tạo hình', 'generate', 'vẽ', 'thiết kế', 'poster', 'banner', 'logo',\n    'ảnh b', 'ảnh c', 'ảnh d', 'nhiều ảnh', '3 ảnh', 'ba ảnh', 'sửa', 'chỉnh', 'xóa', 'đổi',\n    'sửa ảnh', 'edit', 'chỉnh ảnh', 'xóa nền', 'xoá nền', 'đổi màu', 'biến ảnh',\n    'email', 'mail', 'gmail', 'soạn mail', 'gửi mail',\n    'pj'\n  ];\n\n  return keywords.some(function(k) { return t.includes(k); });\n})() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "315c67b4-9d28-4fc7-bed2-c84614f38970",
+      "name": "IF: image needs AI Agent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1904,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst images = $('IF: generate image?').first().json.images || [];\nif (!images.length) {\n  return [{\n    json: {\n      action: 'ask_missing_information',\n      message: 'Bạn muốn tạo ảnh nhưng chưa có mô tả ảnh cần tạo.'\n    }\n  }];\n}\n\nreturn images.map((img, index) => ({\n  json: {\n    image_index: index + 1,\n    name: img.name || String.fromCharCode(66 + index),\n    prompt: img.prompt || '',\n    send_as_document: Boolean(img.send_as_document ?? img.send_as_document ?? false)\n  }\n}));\n"
+      },
+      "id": "a97e8a4e-dc0e-42bd-b0e2-579649b961f6",
+      "name": "Split Image Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4064,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sourceJson = $input.first().json || {};\n\n// Lấy binary từ node Get a file\nconst fileItem = $('Get a file').first();\nconst inputBinary = fileItem.binary || {};\n\n// Lấy binary key đầu tiên, thường là \"data\"\nconst binaryKey = Object.keys(inputBinary)[0];\n\nif (!binaryKey) {\n  return [{\n    json: {\n      action: 'ask_missing_information',\n      message: 'Không tìm thấy file ảnh binary từ Telegram. Hãy kiểm tra node Get a file có bật tải file về dạng binary chưa.'\n    }\n  }];\n}\n\nconst imageBinary = inputBinary[binaryKey];\n\n// Lấy prompt từ node IF edit image hoặc từ input hiện tại\nconst prompt =\n  sourceJson.prompt ||\n  $('IF: edit image?').first().json.prompt ||\n  'Hãy chỉnh sửa ảnh theo yêu cầu của người dùng.';\n\nreturn [{\n  json: {\n    action: 'edit_image',\n    prompt,\n    send_as_document: sourceJson.send_as_document ?? false\n  },\n  binary: {\n    data: imageBinary\n  }\n}];"
+      },
+      "id": "8bfae465-d6f6-48aa-839d-1ca8cd98a1d7",
+      "name": "Attach original image binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4064,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c800261e-c8eb-44ef-a99f-bc1ac3e67439",
+              "leftValue": "={{ !!$json.send_as_document }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e0a4e2cc-f159-401f-823e-e5d8e96b7cb6",
+      "name": "IF: send image as document?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4512,
+        864
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "binaryData": true,
+        "additionalFields": {
+          "caption": "={{ $json.name ? ('✅ Ảnh ' + $json.name) : '✅ Ảnh đã tạo/chỉnh sửa' }}"
+        }
+      },
+      "id": "4491bf7a-1549-41e9-a243-a3244d5beeca",
+      "name": "Send generated image as photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4736,
+        960
+      ],
+      "webhookId": "9187c9d9-a9b1-498f-b6bc-9ff6e3af8b72",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $json.chat_id || (() => { const root = $('Telegram Trigger').item.json || {}; const msg = root.message || (root.callback_query && root.callback_query.message) || {}; return msg.chat && msg.chat.id ? msg.chat.id : ''; })() }}",
+        "binaryData": true,
+        "additionalFields": {
+          "caption": "={{ $json.name ? ('✅ File ảnh ' + $json.name) : '✅ File ảnh đã tạo/chỉnh sửa' }}"
+        }
+      },
+      "id": "53bf6d25-6209-4b60-875f-ebab8308f227",
+      "name": "Send generated image as document",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4736,
+        768
+      ],
+      "webhookId": "135b01e7-bf70-48cc-8ef8-e4edaa48750c",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json || {};\n\nfunction extractText(obj) {\n  if (!obj) return '';\n\n  if (typeof obj === 'string') return obj;\n\n  if (obj.text) return obj.text;\n  if (obj.output) return obj.output;\n\n  if (typeof obj.response === 'string') return obj.response;\n  if (typeof obj.content === 'string') return obj.content;\n\n  // Gemini app node thường trả dạng: content.parts[0].text\n  if (obj.content && Array.isArray(obj.content.parts)) {\n    const text = obj.content.parts\n      .map(p => extractText(p))\n      .filter(Boolean)\n      .join('\\n');\n    if (text) return text;\n  }\n\n  // Một số bản trả dạng: parts[0].text\n  if (Array.isArray(obj.parts)) {\n    const text = obj.parts\n      .map(p => extractText(p))\n      .filter(Boolean)\n      .join('\\n');\n    if (text) return text;\n  }\n\n  // Một số API trả dạng: candidates[0].content.parts[0].text\n  if (Array.isArray(obj.candidates)) {\n    const text = obj.candidates\n      .map(c => extractText(c.content || c))\n      .filter(Boolean)\n      .join('\\n');\n    if (text) return text;\n  }\n\n  if (obj.response && Array.isArray(obj.response.candidates)) {\n    const text = obj.response.candidates\n      .map(c => extractText(c.content || c))\n      .filter(Boolean)\n      .join('\\n');\n    if (text) return text;\n  }\n\n  // Một số LangChain node trả dạng generations[0][0].text\n  if (Array.isArray(obj.generations)) {\n    const text = obj.generations\n      .flat(Infinity)\n      .map(g => extractText(g))\n      .filter(Boolean)\n      .join('\\n');\n    if (text) return text;\n  }\n\n  if (obj.message) return obj.message;\n\n  return '';\n}\n\nlet message = extractText(data);\n\nmessage = String(message || '')\n  .replace(/\\\\n/g, '\\n')\n  .replace(/\\*\\*/g, '')\n  .replace(/```json|```/g, '')\n  .replace(/\\r/g, '')\n  .trim();\n\nif (!message) message = 'Mình chưa đọc được nội dung ảnh.';\n\nreturn [{\n  json: {\n    action: 'image_analysis',\n    message,\n    image_analysis: message\n  },\n  binary: $binary\n}];\n"
+      },
+      "id": "ac3a270e-0381-4fae-b1c9-eab1edd1edfb",
+      "name": "Format Analyze Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  let chatId = $json.chat_id || '';\n  try {\n    if (!chatId) {\n      const root = $('Telegram Trigger').first().json || {};\n      const msg = root.message || (root.callback_query && root.callback_query.message) || {};\n      chatId = msg.chat && msg.chat.id ? String(msg.chat.id) : '';\n    }\n  } catch (e) {}\n\n  return `CREATE TABLE IF NOT EXISTS pending_email_drafts_v2 (\n  chat_id TEXT NOT NULL,\n  draft_id TEXT NOT NULL,\n  email_index INTEGER,\n  to_email TEXT,\n  recipient_name TEXT,\n  subject TEXT,\n  body TEXT,\n  sender_name TEXT,\n  batch_id TEXT,\n  telegram_message_id TEXT,\n  status TEXT DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT NOW(),\n  sent_at TIMESTAMP,\n  PRIMARY KEY (chat_id, draft_id)\n);\n\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS email_index INTEGER;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS to_email TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS recipient_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS subject TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS body TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sender_name TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS batch_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;\n\n\nDELETE FROM pending_email_drafts_v2\nWHERE chat_id = ${q(chatId)}\n  AND COALESCE(status, 'pending') = 'pending';`;\n})() }}",
+        "options": {}
+      },
+      "id": "2e38dded-e95b-4bf0-8a0f-0a53528384f6",
+      "name": "Clear old pending drafts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        3392,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"''\") + \"'\";\n  const draft = $('Build draft summary').item.json || {};\n  const sent = $json || {};\n  const messageId = sent.result?.message_id || sent.message_id || sent.data?.message_id || '';\n\n  return `ALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS telegram_message_id TEXT;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS email_index INTEGER;\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';\nALTER TABLE pending_email_drafts_v2 ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;\n\nUPDATE pending_email_drafts_v2\nSET telegram_message_id = ${q(messageId)},\n    email_index = COALESCE(email_index, ${Number(draft.index || 0)})\nWHERE chat_id = ${q(draft.chat_id)}\n  AND draft_id = ${q(draft.draft_id)};\n\nSELECT ${q(draft.chat_id)} AS chat_id,\n       ${q(draft.draft_id)} AS draft_id,\n       ${q(messageId)} AS telegram_message_id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "d96ff045-f8a3-4a48-a572-46d815ec1f89",
+      "name": "Save Telegram message_id",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        4736,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "chatId": "={{ $json.chat_id || $('Telegram Trigger').first().json.callback_query.message.chat.id }}",
+        "messageId": "={{ $json.telegram_message_id || $('Telegram Trigger').first().json.callback_query.message.message_id }}",
+        "text": "={{ (() => {\n  const r = $json || {};\n  return `✅ Email #${r.email_index || ''} đã được gửi thành công.\\n\\nNgười nhận: ${r.recipient_name || ''} <${r.to_email || ''}>\\nNgười gửi/ký tên: ${r.sender_name || ''}\\nTiêu đề: ${r.subject || ''}\\n\\nNút Send Mail đã được ẩn để tránh gửi lại.`;\n})() }}",
+        "additionalFields": {}
+      },
+      "id": "b7f47cde-1822-48dc-963a-4da071cb2c6f",
+      "name": "Edit sent draft message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2320,
+        256
+      ],
+      "webhookId": "899dc461-cf00-4f0f-bdcc-d7d35cf198e3",
+      "credentials": {
+        "telegramApi": {
+          "id": "mVC6J44m8DqsQWBV",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send a chat action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: OK gửi mail?": {
+      "main": [
+        [
+          {
+            "node": "Get pending draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If photo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete pending draft": {
+      "main": [
+        [
+          {
+            "node": "Send success message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If photo?": {
+      "main": [
+        [
+          {
+            "node": "Get a file",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Send a chat action": {
+      "main": [
+        [
+          {
+            "node": "IF: OK gửi mail?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Sub - Telegram AI Chatbot'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a file": {
+      "main": [
+        [
+          {
+            "node": "Analyze an image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze an image": {
+      "main": [
+        [
+          {
+            "node": "Format Analyze Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Normalize AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send normal message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize AI Output": {
+      "main": [
+        [
+          {
+            "node": "IF: action JSON?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: action JSON?": {
+      "main": [
+        [
+          {
+            "node": "IF: create drafts?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send normal message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: create drafts?": {
+      "main": [
+        [
+          {
+            "node": "Clear old pending drafts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF: missing info?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Email Drafts": {
+      "main": [
+        [
+          {
+            "node": "Create a draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a draft": {
+      "main": [
+        [
+          {
+            "node": "Save draft_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save draft_id": {
+      "main": [
+        [
+          {
+            "node": "Build draft summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build draft summary": {
+      "main": [
+        [
+          {
+            "node": "Send created draft message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: missing info?": {
+      "main": [
+        [
+          {
+            "node": "Send missing info message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF: generate image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: generate image?": {
+      "main": [
+        [
+          {
+            "node": "Split Image Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF: edit image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: edit image?": {
+      "main": [
+        [
+          {
+            "node": "Attach original image binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send normal message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image": {
+      "main": [
+        [
+          {
+            "node": "IF: send image as document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Image": {
+      "main": [
+        [
+          {
+            "node": "IF: send image as document?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get pending draft": {
+      "main": [
+        [
+          {
+            "node": "IF: has draft_id?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: has draft_id?": {
+      "main": [
+        [
+          {
+            "node": "Split pending draft_ids",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send no pending message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split pending draft_ids": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Send Mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Send Mail": {
+      "main": [
+        [
+          {
+            "node": "Build send success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build send success": {
+      "main": [
+        [
+          {
+            "node": "Edit sent draft message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: image needs AI Agent?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send image analysis message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Image Prompts": {
+      "main": [
+        [
+          {
+            "node": "Generate Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach original image binary": {
+      "main": [
+        [
+          {
+            "node": "Edit Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: send image as document?": {
+      "main": [
+        [
+          {
+            "node": "Send generated image as document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send generated image as photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Analyze Result": {
+      "main": [
+        [
+          {
+            "node": "IF: image needs AI Agent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear old pending drafts": {
+      "main": [
+        [
+          {
+            "node": "Split Email Drafts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send created draft message": {
+      "main": [
+        [
+          {
+            "node": "Save Telegram message_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit sent draft message": {
+      "main": [
+        [
+          {
+            "node": "Delete pending draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "616c4261-c4cc-4a06-b823-4cbecd5d6ac1",
+  "meta": {
+    "instanceId": "6ed645ef0e1abea1bf1e4e935ff04f9e18d39812387f63cda3415b46240f0405"
+  },
+  "id": "iL5c04bjuy4kombn",
+  "tags": []
+}

@@ -1,0 +1,513 @@
+{
+  "name": "Sub - Get All With Auto Login",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS api_tokens (\n  key_name TEXT PRIMARY KEY,\n  access_token TEXT NOT NULL,\n  updated_at TIMESTAMP DEFAULT NOW()\n);\n\nSELECT \n  access_token,\n  '{{ $(\"When Executed by Another Workflow\").item.json.apiName }}' AS api_name\nFROM api_tokens\nWHERE key_name = 'gifts_api'\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "6517afb7-186c-4742-822f-e73b07f97fc6",
+      "name": "Get current token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -272,
+        704
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://gifts.peoplelinkvietnam.com/api/project/getAllProject",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($json.access_token || '') }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "5db4626e-8680-491a-9c33-c533636180b7",
+      "name": "HTTP Request - Get All Project",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        176,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gifts.peoplelinkvietnam.com/api/login/Login",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "basicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Username",
+              "value": "SADM_000001"
+            },
+            {
+              "name": "Password",
+              "value": "123"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a694587f-4819-44b0-8793-fff29882fead",
+      "name": "HTTP Request - Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        624,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO api_tokens (key_name, access_token, updated_at)\nVALUES ('gifts_api', '{{$json.Data.Token}}', NOW())\nON CONFLICT (key_name) DO UPDATE SET access_token = EXCLUDED.access_token, updated_at = NOW();",
+        "options": {}
+      },
+      "id": "640e2b0f-5f5d-44c1-9d33-0b279bb467ec",
+      "name": "Save new token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        848,
+        800
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Tool workflow: Get All With Auto Login\n\nDùng token đang lưu trong bảng api_tokens.\n\nNếu API lỗi 401/403/token: login lại, lưu token mới, rồi gọi lại API.",
+        "height": 148,
+        "width": 332,
+        "color": 5
+      },
+      "id": "21ab4da3-2504-450b-8106-f7b26e01eefc",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "apiName"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -496,
+        704
+      ],
+      "id": "ce71b658-94e8-405c-b518-5b234c21a243",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM api_tokens\nWHERE key_name = 'gifts_api';",
+        "options": {}
+      },
+      "id": "e844c3da-6f93-4928-b401-bd314a65b7da",
+      "name": "Delete Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        -496,
+        112
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "C9qZZojX1xF9HMur",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e60d9ca9-2a3a-4b80-b0c4-6919b52a4098",
+              "name": "data",
+              "value": "={{ $json.body || $json.data || $json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        624,
+        432
+      ],
+      "id": "9a847b7c-acbc-46b6-99e4-7cd2c97fe996",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "url": "https://gifts.peoplelinkvietnam.com/api/systemUser/GetAllRole",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($json.access_token || '') }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "f4c8f0a5-9b1f-4349-92aa-b5be10ac6579",
+      "name": "HTTP Request - Get All Role",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        176,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://gifts.peoplelinkvietnam.com/api/menu/GetAllMenu",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($json.access_token || '') }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1a4ae5c-1a3e-4dd7-8c91-1e3ca015dfcf",
+      "name": "HTTP Request - Get All Menu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        176,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.api_name.trim().toLowerCase() == 'project' }}",
+                    "rightValue": "{{\"project\"}}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "id": "d5784b7e-6efd-437a-a82b-49d2859ca4d8"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "de3511a0-d5f8-4555-a8e0-c7ccb71cb901",
+                    "leftValue": "={{ $json.api_name.trim().toLowerCase() == 'role' }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a01fed63-5bce-4c14-8994-923051b7bdcb",
+                    "leftValue": "={{ $json.api_name.trim().toLowerCase() == 'menu' }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -48,
+        512
+      ],
+      "id": "8861b00f-d465-4925-9fe5-0d5c9e201536",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "db31f77b-8d5b-431a-8ebf-203835340c9b",
+              "leftValue": "={{ $json.statusCode != 401}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        528
+      ],
+      "id": "3fa8e924-a0e7-46fa-b641-2563eeac1e1a",
+      "name": "If (lỗi xác thực thì login lấy token)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Get current token": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - Get All Project": {
+      "main": [
+        [
+          {
+            "node": "If (lỗi xác thực thì login lấy token)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - Login": {
+      "main": [
+        [
+          {
+            "node": "Save new token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save new token": {
+      "main": [
+        [
+          {
+            "node": "Get current token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Get current token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request - Get All Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request - Get All Role",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request - Get All Menu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - Get All Menu": {
+      "main": [
+        [
+          {
+            "node": "If (lỗi xác thực thì login lấy token)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - Get All Role": {
+      "main": [
+        [
+          {
+            "node": "If (lỗi xác thực thì login lấy token)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If (lỗi xác thực thì login lấy token)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request - Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ab78ac7d-6092-4402-962b-60cc2fc34d53",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6ed645ef0e1abea1bf1e4e935ff04f9e18d39812387f63cda3415b46240f0405"
+  },
+  "id": "jgLzaTygp10ioy1J",
+  "tags": []
+}
